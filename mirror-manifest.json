@@ -1,0 +1,62 @@
+{
+  "source": "https://getwificode.com",
+  "generatedAt": "2026-09-21T22:24:16.494Z",
+  "pages": [
+    {
+      "route": "vsl1",
+      "bytes": 216903
+    },
+    {
+      "route": "oto1",
+      "bytes": 319869
+    },
+    {
+      "route": "oto2",
+      "bytes": 321609
+    },
+    {
+      "route": "oto3",
+      "bytes": 318712
+    },
+    {
+      "route": "oto4",
+      "bytes": 318500
+    },
+    {
+      "route": "oto5",
+      "bytes": 318751
+    },
+    {
+      "route": "oto6",
+      "bytes": 318375
+    },
+    {
+      "route": "oto7",
+      "bytes": 317430
+    },
+    {
+      "route": "terms",
+      "bytes": 93823
+    },
+    {
+      "route": "pp",
+      "bytes": 92612
+    },
+    {
+      "route": "refund",
+      "bytes": 88847
+    },
+    {
+      "route": "compliance",
+      "bytes": 95866
+    },
+    {
+      "route": "earnings",
+      "bytes": 88512
+    },
+    {
+      "route": "thankyou",
+      "bytes": 195572
+    }
+  ]
+}
