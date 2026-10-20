@@ -1,5 +1,5 @@
 (() => {
-  if (/^\/thankyou\/?$/.test(location.pathname)) {
+  if (/^\/thankyou\/?$/.test(location.pathname) && !document.querySelector('.wc-call-now')) {
     const callout = document.createElement('section');
     callout.className = 'wc-call-now';
     callout.innerHTML = '<div><strong>YOUR ORDER IS COMPLETE</strong><h2>Call In Now To Get Started</h2><a href="tel:+18582571162">(858) 257-1162</a><p>Tap the number or call now so we can help you get started.</p></div>';
