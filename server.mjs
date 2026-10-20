@@ -51,6 +51,12 @@ function stream(file,res){if(!existsSync(file)){res.writeHead(404);return res.en
 
 function syncOfferPricing(pathname,html){
   if(/^\/thankyou\/?$/.test(pathname)){
+    const bookingUrl='https://cal.com/support-staff-wznd51/wificode-onboarding';
+    html=html
+      .replaceAll('https://wificodemembers.com/auth/sign-up',bookingUrl)
+      .replaceAll('https:\\u002F\\u002Fwificodemembers.com\\u002Fauth\\u002Fsign-up','https:\\u002F\\u002Fcal.com\\u002Fsupport-staff-wznd51\\u002Fwificode-onboarding')
+      .replaceAll('Click Here To Sign Up','Schedule Your Onboarding Call')
+      .replaceAll('Sign Up For Your Account','Schedule Your Onboarding Call');
     const style='<style>.wc-call-now{position:relative;z-index:99999;background:linear-gradient(135deg,#07152f,#0b4db8);color:#fff;text-align:center;padding:42px 18px;border-bottom:8px solid #ffd43b;box-shadow:0 10px 35px #0005}.wc-call-now div{max-width:900px;margin:auto}.wc-call-now strong{display:inline-block;background:#ffd43b;color:#111827;padding:8px 16px;border-radius:999px;font:800 15px/1.2 Arial,sans-serif;letter-spacing:.08em}.wc-call-now h2{margin:18px 0 8px;font:900 clamp(30px,5vw,58px)/1.05 Arial,sans-serif;text-transform:uppercase}.wc-call-now a{display:inline-block;margin:10px 0;padding:18px 30px;border-radius:14px;background:#22c55e;color:#fff!important;text-decoration:none;font:900 clamp(32px,6vw,68px)/1 Arial,sans-serif;box-shadow:0 8px 0 #147a38,0 14px 30px #0005}.wc-call-now p{margin:22px 0 0;font:700 20px/1.4 Arial,sans-serif}@media(max-width:600px){.wc-call-now{padding:28px 12px}.wc-call-now a{padding:16px 14px;width:100%}}</style>';
     const callout='<section class="wc-call-now"><div><strong>YOUR ORDER IS COMPLETE</strong><h2>Next Step: Call Our Office Now To Get Started</h2><a href="tel:+18582571162">(858) 257-1162</a><p>Tap the number or call now so our team can help you get started.</p></div></section>';
     return html.replace('</head>',`${style}</head>`).replace(/<body([^>]*)>/i,`<body$1>${callout}`);
