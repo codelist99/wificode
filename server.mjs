@@ -50,7 +50,7 @@ async function body(req){const chunks=[];let size=0;for await(const chunk of req
 function stream(file,res){if(!existsSync(file)){res.writeHead(404);return res.end('Not found')}res.writeHead(200,{'content-type':types[extname(file).toLowerCase()]||'application/octet-stream','cache-control':'no-cache'});createReadStream(file).pipe(res)}
 
 function syncOfferPricing(pathname,html){
-  if(pathname==='/oto2')return html.replaceAll('$97','$69');
+  if(pathname==='/oto2')return html.replaceAll('$197','$177').replaceAll('$97','$69');
   if(pathname==='/oto3')return html.replaceAll('$97','$99');
   if(pathname==='/oto6')return html.replaceAll('$97','$79').replaceAll('$100 OFF!','$118 OFF!');
   return html;
