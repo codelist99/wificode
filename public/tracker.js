@@ -28,15 +28,6 @@
       sms_consent:Boolean(data.sms_consent || form.querySelector('[name*=sms_consent]:checked')), landing_page:location.pathname, ...attribution });
   }, true);
   document.addEventListener('click', event => {
-    const noThanks = event.target.closest('button');
-    const currentOto = location.pathname.match(/^\/oto([1-7])\/?$/);
-    if (noThanks && currentOto && noThanks.textContent.trim().toUpperCase().startsWith('NO THANKS')) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      const number = Number(currentOto[1]);
-      location.href = number < 7 ? `/oto${number + 1}` : '/thankyou';
-      return;
-    }
     const link = event.target.closest('a[href*="jvzoo.com"],a[href*="/b/"]');
     if (!link) return;
     send('/api/events', { type:'checkout_click', page:location.pathname, product_id:link.href, ...context });
