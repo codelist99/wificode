@@ -65,9 +65,6 @@ function syncOfferPricing(pathname,html){
     const callout=emailFix+'<section class="wc-call-now"><div><h1>Congratulations</h1><p class="thanks">Thanks for purchasing WifiCode</p><strong>YOUR ORDER IS COMPLETE</strong><h2>Step 1: Call Our Office Now To Get Started</h2><a class="phone" href="tel:+18582571162">(858) 257-1162</a><p>Tap the number or call now so our team can help you get started.</p><div class="or">— OR —</div><a class="schedule" href="'+bookingUrl+'" target="_blank" rel="noreferrer noopener">Schedule Your Onboarding Call</a></div></section>';
     return html.replace('</head>',`${style}</head>`).replace(/<body([^>]*)>/i,`<body$1>${callout}`);
   }
-  if(pathname==='/oto2')return html.replaceAll('$197','$177').replaceAll('$97','$69');
-  if(pathname==='/oto3')return html.replaceAll('$97','$99');
-  if(pathname==='/oto6')return html.replaceAll('$97','$79').replaceAll('$100 OFF!','$118 OFF!');
   return html;
 }
 
