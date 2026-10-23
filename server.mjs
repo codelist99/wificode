@@ -6,7 +6,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { upsertLead, addEvent, scheduleAutomations, one, many, run, ready } from './lib/database.mjs';
 import { processDueMessages } from './lib/automation.mjs';
 import { getProduct } from './lib/products.mjs';
-import { chargeOpaque, chargeProfile, refundOrVoid, getRecentRefundTransactions, getSettledTransactionDiagnostics } from './lib/authorize-net.mjs';
+import { chargeOpaque, chargeProfile, refundOrVoid, getTransactionDetails, getRecentRefundTransactions, getSettledTransactionDiagnostics } from './lib/authorize-net.mjs';
 
 const root=process.cwd(),port=Number(process.env.PORT||4173),now=()=>new Date().toISOString();
 let refundSyncAt=0,refundSyncPromise,refundSyncStatus={ok:null,message:'Not checked'};
@@ -86,7 +86,7 @@ async function api(req,res,url){
   if(url.pathname.startsWith('/api/admin/')){
     if(!requireAdmin(req,res))return;
     if(req.method==='GET'&&url.pathname==='/api/admin/report')return json(res,200,await campaignReport(url));
-    if(req.method==='GET'&&url.pathname==='/api/admin/authorize-diagnostics'){const first=await one(`SELECT MIN(created_at) first_at FROM orders`),start=first?.first_at||new Date(Date.now()-30*86400000);return json(res,200,await getSettledTransactionDiagnostics(new Date(new Date(start).getTime()-86400000),new Date()))}
+    if(req.method==='GET'&&url.pathname==='/api/admin/authorize-diagnostics'){const first=await one(`SELECT MIN(created_at) first_at FROM orders`),start=first?.first_at||new Date(Date.now()-30*86400000),report=await getSettledTransactionDiagnostics(new Date(new Date(start).getTime()-86400000),new Date()),orders=await many(`SELECT transaction_id FROM orders WHERE transaction_id IS NOT NULL ORDER BY updated_at DESC LIMIT 20`),details=[];for(const order of orders){try{details.push(await getTransactionDetails(order.transaction_id))}catch(error){details.push({transactionId:order.transaction_id,error:error.message})}}return json(res,200,{...report,orderStatusCounts:details.reduce((out,item)=>{const key=item.error?`error: ${item.error}`:`${item.transactionType||'unknown'} / ${item.status||'unknown'} / batch:${item.batchId||'none'}`;out[key]=(out[key]||0)+1;return out},{})})}
     if(req.method==='GET'&&url.pathname==='/api/admin/traffic-spend'){
       await syncAuthorizeRefunds();
       const [orders,spend,items,refundItems,chargebackTotal,chargebackItems]=await Promise.all([
