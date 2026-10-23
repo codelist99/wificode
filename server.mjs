@@ -6,9 +6,16 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { upsertLead, addEvent, scheduleAutomations, one, many, run, ready } from './lib/database.mjs';
 import { processDueMessages } from './lib/automation.mjs';
 import { getProduct } from './lib/products.mjs';
-import { chargeOpaque, chargeProfile, refundOrVoid } from './lib/authorize-net.mjs';
+import { chargeOpaque, chargeProfile, refundOrVoid, getRecentRefundTransactions } from './lib/authorize-net.mjs';
 
 const root=process.cwd(),port=Number(process.env.PORT||4173),now=()=>new Date().toISOString();
+let refundSyncAt=0,refundSyncPromise;
+async function syncAuthorizeRefunds(){
+  if(Date.now()-refundSyncAt<300000)return;
+  if(refundSyncPromise)return refundSyncPromise;
+  refundSyncPromise=(async()=>{for(const refund of await getRecentRefundTransactions(14)){const order=await one(`SELECT * FROM orders WHERE transaction_id=$1`,[refund.refTransactionId]);if(!order)continue;const amount=Math.abs(Number(refund.amount||0));if(!amount)continue;const stamp=refund.submittedAt||now(),inserted=(await run(`INSERT INTO refunds(order_id,lead_id,action,amount,status,original_transaction_id,gateway_transaction_id,response_message,created_at,updated_at) VALUES($1,$2,'refund',$3,'succeeded',$4,$5,'Synchronized from Authorize.Net',$6,$6) ON CONFLICT(gateway_transaction_id) DO NOTHING RETURNING id`,[order.id,order.lead_id,amount,order.transaction_id,refund.transactionId,stamp]))[0];if(!inserted)continue;await run(`UPDATE orders SET refunded_amount=LEAST(amount,refunded_amount+$1),refund_status=CASE WHEN refunded_amount+$1>=amount THEN 'refunded' ELSE 'partially_refunded' END,refund_updated_at=$2 WHERE id=$3`,[amount,stamp,order.id]);await addEvent(order.lead_id,'refund',{value:amount,currency:order.currency,product_id:order.product_id,transaction_id:refund.transactionId,metadata:{gateway:'authorize_net',synchronized:true,original_transaction_id:order.transaction_id}})}refundSyncAt=Date.now()})().catch(error=>console.error('Authorize.Net refund sync failed',error.message)).finally(()=>{refundSyncPromise=null});
+  return refundSyncPromise;
+}
 const types={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.json':'application/json; charset=utf-8','.png':'image/png','.jpg':'image/jpeg','.svg':'image/svg+xml'};
 const json=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(value));};
 const csvCell=value=>{let text=value==null?'':String(value);if(/^[=+\-@]/.test(text))text=`'${text}`;return `"${text.replace(/"/g,'""')}"`};
@@ -80,13 +87,17 @@ async function api(req,res,url){
     if(!requireAdmin(req,res))return;
     if(req.method==='GET'&&url.pathname==='/api/admin/report')return json(res,200,await campaignReport(url));
     if(req.method==='GET'&&url.pathname==='/api/admin/traffic-spend'){
-      const [orders,spend,items]=await Promise.all([
+      await syncAuthorizeRefunds();
+      const [orders,spend,items,refundItems,chargebackTotal,chargebackItems]=await Promise.all([
         one(`SELECT COALESCE(SUM(amount),0) gross_revenue,COALESCE(SUM(refunded_amount),0) refunds FROM orders WHERE status='paid'`),
         one(`SELECT COALESCE(SUM(amount),0) total FROM traffic_spend`),
-        many(`SELECT id,spend_date,amount,source,notes,created_at FROM traffic_spend ORDER BY spend_date DESC,id DESC`)
+        many(`SELECT id,spend_date,amount,source,notes,created_at FROM traffic_spend ORDER BY spend_date DESC,id DESC`),
+        many(`SELECT r.id,r.amount,r.action,r.updated_at,l.first_name,l.last_name,l.email,o.product_name FROM refunds r JOIN orders o ON o.id=r.order_id JOIN leads l ON l.id=r.lead_id WHERE r.status='succeeded' ORDER BY r.updated_at DESC,r.id DESC`),
+        one(`SELECT COALESCE(SUM(amount),0) total FROM chargebacks WHERE status NOT IN ('won','reversed')`),
+        many(`SELECT c.*,l.first_name,l.last_name,l.email,o.product_name FROM chargebacks c LEFT JOIN leads l ON l.id=c.lead_id LEFT JOIN orders o ON o.id=c.order_id ORDER BY c.occurred_at DESC,c.id DESC`)
       ]);
-      const grossRevenue=Number(orders?.gross_revenue||0),refunds=Number(orders?.refunds||0),revenue=grossRevenue-refunds,totalSpend=Number(spend?.total||0);
-      return json(res,200,{grossRevenue,refunds,revenue,totalSpend,profit:revenue-totalSpend,items});
+      const grossRevenue=Number(orders?.gross_revenue||0),refunds=Number(orders?.refunds||0),chargebacks=Number(chargebackTotal?.total||0),revenue=grossRevenue-refunds,totalSpend=Number(spend?.total||0);
+      return json(res,200,{grossRevenue,refunds,chargebacks,revenue,totalSpend,profit:grossRevenue-refunds-chargebacks-totalSpend,items,refundItems,chargebackItems});
     }
     if(req.method==='POST'&&url.pathname==='/api/admin/traffic-spend'){
       const input=await body(req),spendDate=String(input.spend_date||'').trim(),amount=Math.round(Number(input.amount)*100)/100;
