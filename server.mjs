@@ -79,6 +79,22 @@ async function api(req,res,url){
   if(url.pathname.startsWith('/api/admin/')){
     if(!requireAdmin(req,res))return;
     if(req.method==='GET'&&url.pathname==='/api/admin/report')return json(res,200,await campaignReport(url));
+    if(req.method==='GET'&&url.pathname==='/api/admin/traffic-spend'){
+      const [orders,spend,items]=await Promise.all([
+        one(`SELECT COALESCE(SUM(amount),0) gross_revenue,COALESCE(SUM(refunded_amount),0) refunds FROM orders WHERE status='paid'`),
+        one(`SELECT COALESCE(SUM(amount),0) total FROM traffic_spend`),
+        many(`SELECT id,spend_date,amount,source,notes,created_at FROM traffic_spend ORDER BY spend_date DESC,id DESC`)
+      ]);
+      const grossRevenue=Number(orders?.gross_revenue||0),refunds=Number(orders?.refunds||0),revenue=grossRevenue-refunds,totalSpend=Number(spend?.total||0);
+      return json(res,200,{grossRevenue,refunds,revenue,totalSpend,profit:revenue-totalSpend,items});
+    }
+    if(req.method==='POST'&&url.pathname==='/api/admin/traffic-spend'){
+      const input=await body(req),spendDate=String(input.spend_date||'').trim(),amount=Math.round(Number(input.amount)*100)/100;
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(spendDate)||Number.isNaN(Date.parse(`${spendDate}T00:00:00Z`)))return json(res,400,{error:'Choose a valid spend date'});
+      if(!Number.isFinite(amount)||amount<=0)return json(res,400,{error:'Enter a traffic spend greater than zero'});
+      const item=await one(`INSERT INTO traffic_spend(spend_date,amount,source,notes) VALUES($1,$2,$3,$4) RETURNING id,spend_date,amount,source,notes,created_at`,[spendDate,amount,String(input.source||'').trim().slice(0,120),String(input.notes||'').trim().slice(0,500)]);
+      return json(res,201,{ok:true,item});
+    }
     if(req.method==='GET'&&url.pathname==='/api/admin/leads/export'){const items=await many("SELECT l.*,CASE WHEN EXISTS(SELECT 1 FROM orders o WHERE o.lead_id=l.id AND o.status='paid') THEN 'customer' ELSE l.status END AS display_status FROM leads l ORDER BY l.created_at DESC"),columns=[['ID','id'],['First Name','first_name'],['Last Name','last_name'],['Email','email'],['Phone','phone'],['Status','display_status'],['Source','source'],['Tags','tags'],['Notes','notes'],['Email Consent','email_consent'],['SMS Consent','sms_consent'],['Unsubscribed','unsubscribed'],['AID','aid'],['TID','tid'],['UTM Source','utm_source'],['UTM Campaign','utm_campaign'],['Landing Page','landing_page'],['Created','created_at'],['Updated','updated_at']],csv='\uFEFF'+[columns.map(([label])=>csvCell(label)).join(','),...items.map(item=>columns.map(([,key])=>csvCell(item[key])).join(','))].join('\r\n');res.writeHead(200,{'content-type':'text/csv; charset=utf-8','content-disposition':`attachment; filename="wificode-leads-${now().slice(0,10)}.csv"`,'cache-control':'no-store'});return res.end(csv)}
     if(req.method==='GET'&&url.pathname==='/api/admin/orders'){const q=String(url.searchParams.get('q')||'').trim().slice(0,100),range=reportRange(url),pageSize=50,filter=`o.updated_at >= $1 AND o.updated_at < $2 AND ($3='' OR CONCAT_WS(' ',l.first_name,l.last_name) ILIKE '%'||$3||'%' OR COALESCE(l.email,'') ILIKE '%'||$3||'%' OR COALESCE(l.phone,'') ILIKE '%'||$3||'%' OR COALESCE(o.product_name,'') ILIKE '%'||$3||'%' OR COALESCE(o.transaction_id,'') ILIKE '%'||$3||'%')`,params=[range.start,range.end,q],total=Number((await one(`SELECT COUNT(*) AS total FROM orders o JOIN leads l ON l.id=o.lead_id WHERE ${filter}`,params)).total),pages=Math.max(1,Math.ceil(total/pageSize)),page=Math.min(pages,Math.max(1,Number(url.searchParams.get('page'))||1)),offset=(page-1)*pageSize,items=await many(`SELECT o.*,l.email,l.phone,l.first_name,l.last_name FROM orders o JOIN leads l ON l.id=o.lead_id WHERE ${filter} ORDER BY o.updated_at DESC LIMIT $4 OFFSET $5`,[...params,pageSize,offset]);return json(res,200,{items,pagination:{page,pageSize,total,pages},range,query:q})}
     if(req.method==='POST'&&url.pathname==='/api/admin/refunds'){
