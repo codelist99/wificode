@@ -6,7 +6,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { upsertLead, addEvent, scheduleAutomations, one, many, run, ready } from './lib/database.mjs';
 import { processDueMessages } from './lib/automation.mjs';
 import { getProduct } from './lib/products.mjs';
-import { chargeOpaque, chargeProfile, refundOrVoid, getRecentRefundTransactions } from './lib/authorize-net.mjs';
+import { chargeOpaque, chargeProfile, refundOrVoid, getRecentRefundTransactions, getSettledTransactionDiagnostics } from './lib/authorize-net.mjs';
 
 const root=process.cwd(),port=Number(process.env.PORT||4173),now=()=>new Date().toISOString();
 let refundSyncAt=0,refundSyncPromise,refundSyncStatus={ok:null,message:'Not checked'};
@@ -86,6 +86,7 @@ async function api(req,res,url){
   if(url.pathname.startsWith('/api/admin/')){
     if(!requireAdmin(req,res))return;
     if(req.method==='GET'&&url.pathname==='/api/admin/report')return json(res,200,await campaignReport(url));
+    if(req.method==='GET'&&url.pathname==='/api/admin/authorize-diagnostics'){const first=await one(`SELECT MIN(created_at) first_at FROM orders`),start=first?.first_at||new Date(Date.now()-30*86400000);return json(res,200,await getSettledTransactionDiagnostics(new Date(new Date(start).getTime()-86400000),new Date()))}
     if(req.method==='GET'&&url.pathname==='/api/admin/traffic-spend'){
       await syncAuthorizeRefunds();
       const [orders,spend,items,refundItems,chargebackTotal,chargebackItems]=await Promise.all([
