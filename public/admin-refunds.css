@@ -1,0 +1,12 @@
+.refund-button {
+  border: 0;
+  background: var(--red);
+  color: #fff;
+  border-radius: 7px;
+  padding: 8px 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.refund-button:disabled { opacity: .45; cursor: wait; }
+.refund-note { display: block; color: var(--red); margin-top: 3px; }
+.refund-state { color: var(--muted); font-size: 12px; text-transform: capitalize; }

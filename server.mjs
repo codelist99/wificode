@@ -6,7 +6,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { upsertLead, addEvent, scheduleAutomations, one, many, run, ready } from './lib/database.mjs';
 import { processDueMessages } from './lib/automation.mjs';
 import { getProduct } from './lib/products.mjs';
-import { chargeOpaque, chargeProfile } from './lib/authorize-net.mjs';
+import { chargeOpaque, chargeProfile, refundOrVoid } from './lib/authorize-net.mjs';
 
 const root=process.cwd(),port=Number(process.env.PORT||4173),now=()=>new Date().toISOString();
 const types={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.json':'application/json; charset=utf-8','.png':'image/png','.jpg':'image/jpeg','.svg':'image/svg+xml'};
@@ -81,6 +81,44 @@ async function api(req,res,url){
     if(req.method==='GET'&&url.pathname==='/api/admin/report')return json(res,200,await campaignReport(url));
     if(req.method==='GET'&&url.pathname==='/api/admin/leads/export'){const items=await many("SELECT l.*,CASE WHEN EXISTS(SELECT 1 FROM orders o WHERE o.lead_id=l.id AND o.status='paid') THEN 'customer' ELSE l.status END AS display_status FROM leads l ORDER BY l.created_at DESC"),columns=[['ID','id'],['First Name','first_name'],['Last Name','last_name'],['Email','email'],['Phone','phone'],['Status','display_status'],['Source','source'],['Tags','tags'],['Notes','notes'],['Email Consent','email_consent'],['SMS Consent','sms_consent'],['Unsubscribed','unsubscribed'],['AID','aid'],['TID','tid'],['UTM Source','utm_source'],['UTM Campaign','utm_campaign'],['Landing Page','landing_page'],['Created','created_at'],['Updated','updated_at']],csv='\uFEFF'+[columns.map(([label])=>csvCell(label)).join(','),...items.map(item=>columns.map(([,key])=>csvCell(item[key])).join(','))].join('\r\n');res.writeHead(200,{'content-type':'text/csv; charset=utf-8','content-disposition':`attachment; filename="wificode-leads-${now().slice(0,10)}.csv"`,'cache-control':'no-store'});return res.end(csv)}
     if(req.method==='GET'&&url.pathname==='/api/admin/orders'){const q=String(url.searchParams.get('q')||'').trim().slice(0,100),range=reportRange(url),pageSize=50,filter=`o.updated_at >= $1 AND o.updated_at < $2 AND ($3='' OR CONCAT_WS(' ',l.first_name,l.last_name) ILIKE '%'||$3||'%' OR COALESCE(l.email,'') ILIKE '%'||$3||'%' OR COALESCE(l.phone,'') ILIKE '%'||$3||'%' OR COALESCE(o.product_name,'') ILIKE '%'||$3||'%' OR COALESCE(o.transaction_id,'') ILIKE '%'||$3||'%')`,params=[range.start,range.end,q],total=Number((await one(`SELECT COUNT(*) AS total FROM orders o JOIN leads l ON l.id=o.lead_id WHERE ${filter}`,params)).total),pages=Math.max(1,Math.ceil(total/pageSize)),page=Math.min(pages,Math.max(1,Number(url.searchParams.get('page'))||1)),offset=(page-1)*pageSize,items=await many(`SELECT o.*,l.email,l.phone,l.first_name,l.last_name FROM orders o JOIN leads l ON l.id=o.lead_id WHERE ${filter} ORDER BY o.updated_at DESC LIMIT $4 OFFSET $5`,[...params,pageSize,offset]);return json(res,200,{items,pagination:{page,pageSize,total,pages},range,query:q})}
+    if(req.method==='POST'&&url.pathname==='/api/admin/refunds'){
+      const input=await body(req);
+      if(!secureEqual(String(input.pin||''),'67'))return json(res,401,{error:'Incorrect confirmation PIN'});
+      const orderId=Number(input.orderId);
+      if(!Number.isSafeInteger(orderId)||orderId<1)return json(res,400,{error:'Invalid order'});
+      const current=await one('SELECT * FROM orders WHERE id=$1',[orderId]);
+      if(!current||current.status!=='paid'||!current.transaction_id)return json(res,409,{error:'Only approved Authorize.Net transactions can be refunded'});
+      const remaining=Number(current.amount)-Number(current.refunded_amount||0),requested=input.amount==null||input.amount===''?remaining:Number(input.amount),amount=Math.round(requested*100)/100;
+      if(!Number.isFinite(amount)||amount<=0)return json(res,400,{error:'Refund amount must be greater than zero'});
+      const stamp=now(),reserved=(await run(`UPDATE orders SET refunded_amount=refunded_amount+$1,refund_status='processing',refund_updated_at=$2 WHERE id=$3 AND status='paid' AND refund_status<>'processing' AND amount-refunded_amount >= $1 RETURNING *`,[amount,stamp,orderId]))[0];
+      if(!reserved)return json(res,409,{error:'Refund exceeds the remaining refundable amount or another refund is processing'});
+      let audit;
+      try{
+        audit=(await run(`INSERT INTO refunds(order_id,lead_id,amount,status,original_transaction_id,created_at,updated_at) VALUES($1,$2,$3,'processing',$4,$5,$5) RETURNING *`,[orderId,reserved.lead_id,amount,reserved.transaction_id,stamp]))[0];
+      }catch(error){
+        await run(`UPDATE orders SET refunded_amount=GREATEST(0,refunded_amount-$1),refund_status=CASE WHEN refunded_amount-$1<=0 THEN '' ELSE 'partially_refunded' END,refund_updated_at=$2 WHERE id=$3`,[amount,now(),orderId]);
+        throw error;
+      }
+      let gateway;
+      try{
+        gateway=await refundOrVoid({transactionId:reserved.transaction_id,amount,invoice:`WC-R-${audit.id}`});
+      }catch(error){
+        await run(`UPDATE refunds SET status='failed',response_message=$1,updated_at=$2 WHERE id=$3`,[String(error.message).slice(0,500),now(),audit.id]);
+        await run(`UPDATE orders SET refunded_amount=GREATEST(0,refunded_amount-$1),refund_status=CASE WHEN refunded_amount-$1<=0 THEN '' WHEN refunded_amount-$1<amount THEN 'partially_refunded' ELSE 'refunded' END,refund_updated_at=$2 WHERE id=$3`,[amount,now(),orderId]);
+        return json(res,409,{error:error.message});
+      }
+      const finalAmount=gateway.action==='void'?Number(reserved.amount):amount;
+      try{
+        if(finalAmount>amount)await run('UPDATE orders SET refunded_amount=amount WHERE id=$1',[orderId]);
+        await run(`UPDATE refunds SET action=$1,amount=$2,status='succeeded',gateway_transaction_id=$3,response_message=$4,updated_at=$5 WHERE id=$6`,[gateway.action,finalAmount,gateway.transactionId,`${gateway.action==='void'?'Voided':'Refunded'} successfully`,now(),audit.id]);
+        await run(`UPDATE orders SET refund_status=CASE WHEN refunded_amount>=amount THEN 'refunded' ELSE 'partially_refunded' END,refund_updated_at=$1 WHERE id=$2`,[now(),orderId]);
+        await addEvent(reserved.lead_id,'refund',{value:finalAmount,currency:reserved.currency,product_id:reserved.product_id,transaction_id:gateway.transactionId,metadata:{gateway:'authorize_net',action:gateway.action,order_id:orderId,original_transaction_id:reserved.transaction_id}});
+      }catch(error){
+        console.error('Refund succeeded but audit synchronization failed',error);
+        return json(res,200,{ok:true,action:gateway.action,amount:finalAmount,transactionId:gateway.transactionId,warning:'Authorize.Net completed the action, but dashboard synchronization requires review.'});
+      }
+      return json(res,200,{ok:true,action:gateway.action,amount:finalAmount,transactionId:gateway.transactionId});
+    }
     if(req.method==='GET'&&url.pathname==='/api/admin/sales/export'){const items=await many(`${soldLeadSelect} ORDER BY MAX(o.updated_at) DESC`),columns=[['Lead ID','id'],['First Name','first_name'],['Last Name','last_name'],['Email','email'],['Phone','phone'],['Purchase Count','purchase_count'],['Products Purchased','products'],['Gross Sales','gross_sales'],['Refund Count','refund_count'],['Refund Amount','refund_amount'],['Net Sales','net_sales'],['First Purchase','first_purchase_at'],['Last Purchase','last_purchase_at']],csv='\uFEFF'+[columns.map(([label])=>csvCell(label)).join(','),...items.map(item=>columns.map(([,key])=>csvCell(item[key])).join(','))].join('\r\n');res.writeHead(200,{'content-type':'text/csv; charset=utf-8','content-disposition':`attachment; filename="wificode-sold-leads-${now().slice(0,10)}.csv"`,'cache-control':'no-store'});return res.end(csv)}
     if(req.method==='GET'&&url.pathname==='/api/admin/sales'){const q=String(url.searchParams.get('q')||'').trim().slice(0,100),pageSize=50,filter=`($1='' OR CONCAT_WS(' ',s.first_name,s.last_name) ILIKE '%'||$1||'%' OR COALESCE(s.email,'') ILIKE '%'||$1||'%' OR COALESCE(s.phone,'') ILIKE '%'||$1||'%' OR (REGEXP_REPLACE($1,'\\D','','g')<>'' AND REGEXP_REPLACE(COALESCE(s.phone,''),'\\D','','g') LIKE '%'||REGEXP_REPLACE($1,'\\D','','g')||'%'))`,total=Number((await one(`SELECT COUNT(*) AS total FROM (${soldLeadSelect}) s WHERE ${filter}`,[q])).total),pages=Math.max(1,Math.ceil(total/pageSize)),page=Math.min(pages,Math.max(1,Number(url.searchParams.get('page'))||1)),offset=(page-1)*pageSize,items=await many(`SELECT * FROM (${soldLeadSelect}) s WHERE ${filter} ORDER BY last_purchase_at DESC LIMIT $2 OFFSET $3`,[q,pageSize,offset]);return json(res,200,{items,pagination:{page,pageSize,total,pages},query:q})}
     if(req.method==='GET'&&url.pathname==='/api/admin/leads'){const q=String(url.searchParams.get('q')||'').trim().slice(0,100),pageSize=Math.min(100,Math.max(10,Number(url.searchParams.get('pageSize'))||25)),filter=`($1='' OR CONCAT_WS(' ',l.first_name,l.last_name) ILIKE '%'||$1||'%' OR COALESCE(l.email,'') ILIKE '%'||$1||'%' OR COALESCE(l.phone,'') ILIKE '%'||$1||'%' OR (REGEXP_REPLACE($1,'\\D','','g')<>'' AND REGEXP_REPLACE(COALESCE(l.phone,''),'\\D','','g') LIKE '%'||REGEXP_REPLACE($1,'\\D','','g')||'%'))`,total=Number((await one(`SELECT COUNT(*) AS total FROM leads l WHERE ${filter}`,[q])).total),pages=Math.max(1,Math.ceil(total/pageSize)),page=Math.min(pages,Math.max(1,Number(url.searchParams.get('page'))||1)),offset=(page-1)*pageSize,items=await many(`SELECT l.*,CASE WHEN EXISTS(SELECT 1 FROM orders o WHERE o.lead_id=l.id AND o.status='paid') THEN 'customer' ELSE l.status END AS display_status FROM leads l WHERE ${filter} ORDER BY l.created_at DESC LIMIT $2 OFFSET $3`,[q,pageSize,offset]);return json(res,200,{items,pagination:{page,pageSize,total,pages},query:q})}
