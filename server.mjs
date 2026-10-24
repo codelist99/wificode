@@ -115,7 +115,10 @@ async function api(req,res,url){
     if(req.method==='GET'&&url.pathname==='/api/admin/report')return json(res,200,await campaignReport(url));
     if(req.method==='GET'&&url.pathname==='/api/admin/authorize-diagnostics'){const first=await one(`SELECT MIN(created_at) first_at FROM orders`),start=first?.first_at||new Date(Date.now()-30*86400000),report=await getSettledTransactionDiagnostics(new Date(new Date(start).getTime()-86400000),new Date()),orders=await many(`(SELECT transaction_id FROM orders WHERE transaction_id IS NOT NULL ORDER BY updated_at DESC LIMIT 20) UNION ALL (SELECT transaction_id FROM orders WHERE transaction_id IS NOT NULL ORDER BY updated_at ASC LIMIT 20)`),details=[];for(const order of orders){try{details.push(await getTransactionDetails(order.transaction_id))}catch(error){details.push({transactionId:order.transaction_id,error:error.message})}}const gatewayDates=details.map(item=>item.submittedAt).filter(Boolean).sort();return json(res,200,{...report,gatewayDateRange:{first:gatewayDates[0]||null,last:gatewayDates.at(-1)||null},orderStatusCounts:details.reduce((out,item)=>{const key=item.error?`error: ${item.error}`:`${item.transactionType||'unknown'} / ${item.status||'unknown'} / batch:${item.batchId||'none'}`;out[key]=(out[key]||0)+1;return out},{})})}
     if(req.method==='GET'&&url.pathname==='/api/admin/traffic-spend'){
-      await Promise.all([syncAuthorizeRefunds(),syncZenChargebacks()]);
+      // Reconciliation must never delay or blank the live dashboard. Both sync
+      // functions handle and persist their own errors while cached DB totals render.
+      void syncAuthorizeRefunds();
+      void syncZenChargebacks();
       const [orders,spend,items,refundItems,chargebackTotal,chargebackItems]=await Promise.all([
         one(`SELECT COALESCE(SUM(amount),0) gross_revenue,COALESCE(SUM(refunded_amount),0) refunds FROM orders WHERE status='paid'`),
         one(`SELECT COALESCE(SUM(amount),0) total FROM traffic_spend`),
