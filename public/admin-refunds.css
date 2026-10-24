@@ -8,6 +8,7 @@
   cursor: pointer;
 }
 .refund-button:disabled { opacity: .45; cursor: wait; }
+.buyer-refund-button { margin-left: 10px; padding: 6px 9px; font-size: 12px; }
 .refund-note { display: block; color: var(--red); margin-top: 3px; }
 .refund-state { color: var(--muted); font-size: 12px; text-transform: capitalize; }
 #tab-payments table { table-layout: auto; }
