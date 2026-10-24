@@ -7,14 +7,41 @@ import { upsertLead, addEvent, scheduleAutomations, one, many, run, ready } from
 import { processDueMessages } from './lib/automation.mjs';
 import { getProduct } from './lib/products.mjs';
 import { chargeOpaque, chargeProfile, refundOrVoid, getTransactionDetails, getRecentRefundTransactions, getSettledTransactionDiagnostics } from './lib/authorize-net.mjs';
+import { getAllChargebacks } from './lib/zen-dashboard.mjs';
 
 const root=process.cwd(),port=Number(process.env.PORT||4173),now=()=>new Date().toISOString();
 let refundSyncAt=0,refundSyncPromise,refundSyncStatus={ok:null,message:'Not checked'};
+let chargebackSyncAt=0,chargebackSyncPromise,chargebackSyncStatus={ok:null,message:'Not checked'};
 async function syncAuthorizeRefunds(){
   if(Date.now()-refundSyncAt<300000)return;
   if(refundSyncPromise)return refundSyncPromise;
   refundSyncPromise=(async()=>{let imported=0;const [state,firstOrder]=await Promise.all([one(`SELECT * FROM sync_state WHERE sync_key='authorize_refunds'`),one(`SELECT MIN(created_at) first_at FROM orders WHERE status='paid'`)]);if(!firstOrder?.first_at){refundSyncAt=Date.now();refundSyncStatus={ok:true,message:'No paid orders to reconcile',checkedAt:now()};return}const end=new Date(),first=new Date(firstOrder.first_at),checkpoint=state?.last_success_at?new Date(new Date(state.last_success_at).getTime()-3*86400000):new Date(first.getTime()-86400000);for(let windowStart=new Date(checkpoint);windowStart<end;){const windowEnd=new Date(Math.min(end.getTime(),windowStart.getTime()+30*86400000));for(const refund of await getRecentRefundTransactions(windowStart,windowEnd)){const order=await one(`SELECT * FROM orders WHERE transaction_id=$1`,[refund.action==='void'?refund.transactionId:refund.refTransactionId]);if(!order)continue;const amount=refund.action==='void'?Number(order.amount):Math.abs(Number(refund.amount||0));if(!amount)continue;const stamp=refund.submittedAt||now(),gatewayId=refund.transactionId,inserted=(await run(`INSERT INTO refunds(order_id,lead_id,action,amount,status,original_transaction_id,gateway_transaction_id,response_message,created_at,updated_at) VALUES($1,$2,$3,$4,'succeeded',$5,$6,'Synchronized from Authorize.Net',$7,$7) ON CONFLICT(gateway_transaction_id) DO NOTHING RETURNING id`,[order.id,order.lead_id,refund.action||'refund',amount,order.transaction_id,gatewayId,stamp]))[0];if(!inserted)continue;await run(`UPDATE orders SET refunded_amount=LEAST(amount,refunded_amount+$1),refund_status=CASE WHEN refunded_amount+$1>=amount THEN 'refunded' ELSE 'partially_refunded' END,refund_updated_at=$2 WHERE id=$3`,[amount,stamp,order.id]);await addEvent(order.lead_id,'refund',{value:amount,currency:order.currency,product_id:order.product_id,transaction_id:gatewayId,metadata:{gateway:'authorize_net',action:refund.action||'refund',synchronized:true,original_transaction_id:order.transaction_id}});imported++}windowStart=new Date(windowEnd.getTime()+1000)}const checkedAt=now();await run(`INSERT INTO sync_state(sync_key,last_success_at,status,details,updated_at) VALUES('authorize_refunds',$1,'ok',$2,$1) ON CONFLICT(sync_key) DO UPDATE SET last_success_at=excluded.last_success_at,status=excluded.status,details=excluded.details,updated_at=excluded.updated_at`,[checkedAt,`${imported} new returns imported`]);refundSyncAt=Date.now();refundSyncStatus={ok:true,message:`Full Authorize.Net history synchronized; ${imported} new returns imported`,checkedAt}})().catch(async error=>{refundSyncStatus={ok:false,message:error.message,checkedAt:now()};try{await run(`INSERT INTO sync_state(sync_key,status,details,updated_at) VALUES('authorize_refunds','error',$1,$2) ON CONFLICT(sync_key) DO UPDATE SET status=excluded.status,details=excluded.details,updated_at=excluded.updated_at`,[error.message,now()])}catch{}console.error('Authorize.Net refund sync failed',error.message)}).finally(()=>{refundSyncPromise=null});
   return refundSyncPromise;
+}
+async function syncZenChargebacks(){
+  if(!process.env.ZEN_ACCESS_TOKEN)return;
+  if(Date.now()-chargebackSyncAt<300000)return;
+  if(chargebackSyncPromise)return chargebackSyncPromise;
+  chargebackSyncPromise=(async()=>{
+    const records=await getAllChargebacks();let imported=0,updated=0,matched=0;
+    for(const record of records){
+      if(process.env.ZEN_DBA_ID&&String(record.dba?.id)!==String(process.env.ZEN_DBA_ID))continue;
+      const caseId=String(record.id),reference=String(record.merchantRefId||''),orderId=/^WC-(\d+)$/i.exec(reference)?.[1];
+      const order=orderId?await one('SELECT * FROM orders WHERE id=$1',[orderId]):null;
+      const amount=Math.abs(Number(record.amount||0));if(!caseId||!amount)continue;
+      const status=String(record.status||'processed').toLowerCase(),occurred=record.date?.posted||record.date?.loaded||now();
+      const existing=await one('SELECT id FROM chargebacks WHERE processor_case_id=$1',[caseId]);
+      await run(`INSERT INTO chargebacks(order_id,lead_id,amount,status,processor_case_id,transaction_id,reason,occurred_at,processor_type,attention,fraud,updated_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        ON CONFLICT(processor_case_id) DO UPDATE SET order_id=COALESCE(excluded.order_id,chargebacks.order_id),lead_id=COALESCE(excluded.lead_id,chargebacks.lead_id),amount=excluded.amount,status=excluded.status,transaction_id=excluded.transaction_id,reason=excluded.reason,occurred_at=excluded.occurred_at,processor_type=excluded.processor_type,attention=excluded.attention,fraud=excluded.fraud,updated_at=excluded.updated_at`,
+        [order?.id||null,order?.lead_id||null,amount,status,caseId,String(record.transaction?.id||record.acquirerReferenceNumber||''),String(record.reason?.description||record.description||''),occurred,String(record.type||'Chargeback').toLowerCase(),String(record.attention||'').toLowerCase()==='yes',String(record.fraud||'').toLowerCase()==='yes',now()]);
+      if(order)matched++;if(existing)updated++;else imported++;
+    }
+    const checkedAt=now(),message=`Zen synchronized: ${records.length} chargebacks; ${imported} imported, ${updated} updated, ${matched} matched to orders`;
+    await run(`INSERT INTO sync_state(sync_key,last_success_at,status,details,updated_at) VALUES('zen_chargebacks',$1,'ok',$2,$1) ON CONFLICT(sync_key) DO UPDATE SET last_success_at=excluded.last_success_at,status=excluded.status,details=excluded.details,updated_at=excluded.updated_at`,[checkedAt,message]);
+    chargebackSyncAt=Date.now();chargebackSyncStatus={ok:true,message,checkedAt};
+  })().catch(async error=>{chargebackSyncStatus={ok:false,message:error.message,checkedAt:now()};try{await run(`INSERT INTO sync_state(sync_key,status,details,updated_at) VALUES('zen_chargebacks','error',$1,$2) ON CONFLICT(sync_key) DO UPDATE SET status=excluded.status,details=excluded.details,updated_at=excluded.updated_at`,[error.message,now()])}catch{}console.error('Zen chargeback sync failed',error.message)}).finally(()=>{chargebackSyncPromise=null});
+  return chargebackSyncPromise;
 }
 const types={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.json':'application/json; charset=utf-8','.png':'image/png','.jpg':'image/jpeg','.svg':'image/svg+xml'};
 const json=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(value));};
@@ -88,7 +115,7 @@ async function api(req,res,url){
     if(req.method==='GET'&&url.pathname==='/api/admin/report')return json(res,200,await campaignReport(url));
     if(req.method==='GET'&&url.pathname==='/api/admin/authorize-diagnostics'){const first=await one(`SELECT MIN(created_at) first_at FROM orders`),start=first?.first_at||new Date(Date.now()-30*86400000),report=await getSettledTransactionDiagnostics(new Date(new Date(start).getTime()-86400000),new Date()),orders=await many(`(SELECT transaction_id FROM orders WHERE transaction_id IS NOT NULL ORDER BY updated_at DESC LIMIT 20) UNION ALL (SELECT transaction_id FROM orders WHERE transaction_id IS NOT NULL ORDER BY updated_at ASC LIMIT 20)`),details=[];for(const order of orders){try{details.push(await getTransactionDetails(order.transaction_id))}catch(error){details.push({transactionId:order.transaction_id,error:error.message})}}const gatewayDates=details.map(item=>item.submittedAt).filter(Boolean).sort();return json(res,200,{...report,gatewayDateRange:{first:gatewayDates[0]||null,last:gatewayDates.at(-1)||null},orderStatusCounts:details.reduce((out,item)=>{const key=item.error?`error: ${item.error}`:`${item.transactionType||'unknown'} / ${item.status||'unknown'} / batch:${item.batchId||'none'}`;out[key]=(out[key]||0)+1;return out},{})})}
     if(req.method==='GET'&&url.pathname==='/api/admin/traffic-spend'){
-      await syncAuthorizeRefunds();
+      await Promise.all([syncAuthorizeRefunds(),syncZenChargebacks()]);
       const [orders,spend,items,refundItems,chargebackTotal,chargebackItems]=await Promise.all([
         one(`SELECT COALESCE(SUM(amount),0) gross_revenue,COALESCE(SUM(refunded_amount),0) refunds FROM orders WHERE status='paid'`),
         one(`SELECT COALESCE(SUM(amount),0) total FROM traffic_spend`),
@@ -98,7 +125,7 @@ async function api(req,res,url){
         many(`SELECT c.*,l.first_name,l.last_name,l.email,o.product_name FROM chargebacks c LEFT JOIN leads l ON l.id=c.lead_id LEFT JOIN orders o ON o.id=c.order_id ORDER BY c.occurred_at DESC,c.id DESC`)
       ]);
       const grossRevenue=Number(orders?.gross_revenue||0),refunds=Number(orders?.refunds||0),chargebacks=Number(chargebackTotal?.total||0),revenue=grossRevenue-refunds,totalSpend=Number(spend?.total||0);
-      return json(res,200,{grossRevenue,refunds,chargebacks,revenue,totalSpend,profit:grossRevenue-refunds-chargebacks-totalSpend,items,refundItems,chargebackItems,refundSyncStatus});
+      return json(res,200,{grossRevenue,refunds,chargebacks,revenue,totalSpend,profit:grossRevenue-refunds-chargebacks-totalSpend,items,refundItems,chargebackItems,refundSyncStatus,chargebackSyncStatus});
     }
     if(req.method==='POST'&&url.pathname==='/api/admin/traffic-spend'){
       const input=await body(req),spendDate=String(input.spend_date||'').trim(),amount=Math.round(Number(input.amount)*100)/100;
