@@ -110,8 +110,47 @@
   white-space: normal;
   min-width: 120px;
 }
-.finance-ledger{max-height:240px}.processor-note{margin:10px 2px 0;color:var(--muted);font-size:11px}
-.spend-actions{display:flex;gap:6px;white-space:nowrap}.spend-actions button{border:0;border-radius:6px;padding:6px 9px;font-size:10px;font-weight:800;cursor:pointer}.edit-spend{background:#e8f0ff;color:var(--blue)}.delete-spend{background:#ffe9e9;color:var(--red)}.spend-actions button:disabled{opacity:.55;cursor:wait}.cancel-spend-edit{background:#64748b!important}.spend-ledger th:last-child,.spend-ledger td:last-child{width:1%;white-space:nowrap}
+.finance-ledger {
+  max-height: 240px;
+}
+.processor-note {
+  margin: 10px 2px 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.spend-actions {
+  display: flex;
+  gap: 6px;
+  white-space: nowrap;
+}
+.spend-actions button {
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 9px;
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.edit-spend {
+  background: #e8f0ff;
+  color: var(--blue);
+}
+.delete-spend {
+  background: #ffe9e9;
+  color: var(--red);
+}
+.spend-actions button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.cancel-spend-edit {
+  background: #64748b !important;
+}
+.spend-ledger th:last-child,
+.spend-ledger td:last-child {
+  width: 1%;
+  white-space: nowrap;
+}
 @media (max-width: 760px) {
   .profit-cards,
   .spend-form {
@@ -119,5 +158,37 @@
   }
   .spend-form button {
     grid-column: auto;
+  }
+}
+.kpi-grid.overview-kpis {
+  grid-template-columns: repeat(11, minmax(0, 1fr));
+  gap: 7px;
+}
+.overview-kpis .kpi {
+  min-width: 0;
+  padding: 11px 9px;
+  border-radius: 10px;
+}
+.overview-kpis .kpi .label {
+  font-size: 9px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.overview-kpis .kpi strong {
+  font-size: 18px;
+  margin: 6px 0 3px;
+  white-space: nowrap;
+}
+.overview-kpis .kpi small {
+  display: block;
+  font-size: 9px;
+  line-height: 1.2;
+}
+@media (max-width: 1150px) {
+  .kpi-grid.overview-kpis {
+    grid-template-columns: repeat(11, minmax(105px, 1fr));
+    overflow-x: auto;
+    padding-bottom: 5px;
   }
 }

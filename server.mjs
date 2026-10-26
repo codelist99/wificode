@@ -51,11 +51,12 @@ const reportRange=url=>{const endInput=new Date(url.searchParams.get('end')||Dat
 const num=value=>Number(value||0);
 async function campaignReport(url){
   const range=reportRange(url),args=[range.start,range.end],session=`COALESCE(NULLIF(metadata->>'session_id',''),'legacy-'||id::text)`;
-  const [eventTotals,leadTotals,orderTotals,refundTotals,routes,devices,payments,offers,attribution,viewTrend,leadTrend,revenueTrend]=await Promise.all([
+  const [eventTotals,leadTotals,orderTotals,refundTotals,spendTotals,routes,devices,payments,offers,attribution,viewTrend,leadTrend,revenueTrend]=await Promise.all([
     one(`SELECT COUNT(*) FILTER(WHERE type='page_view') views,COUNT(DISTINCT ${session}) FILTER(WHERE type='page_view') visitors,COUNT(DISTINCT ${session}) FILTER(WHERE type='page_view' AND page='/checkout') checkout_visitors,COUNT(DISTINCT ${session}) FILTER(WHERE type='checkout_start') checkout_started,COUNT(DISTINCT ${session}) FILTER(WHERE type IN('video_unmute','video_25','video_50','video_75','video_100')) video_engaged,COUNT(DISTINCT ${session}) FILTER(WHERE type='video_25') video_25,COUNT(DISTINCT ${session}) FILTER(WHERE type='video_50') video_50,COUNT(DISTINCT ${session}) FILTER(WHERE type='video_75') video_75,COUNT(DISTINCT ${session}) FILTER(WHERE type='video_100') video_100 FROM events WHERE created_at >= $1 AND created_at < $2`,args),
     one(`SELECT COUNT(*) leads FROM leads WHERE created_at >= $1 AND created_at < $2`,args),
     one(`SELECT COUNT(*) attempts,COUNT(*) FILTER(WHERE status='paid') approvals,COUNT(*) FILTER(WHERE status='declined') declines,COUNT(*) FILTER(WHERE status='error') errors,COUNT(DISTINCT lead_id) payment_people,COUNT(DISTINCT lead_id) FILTER(WHERE status='paid') buyers,COUNT(DISTINCT lead_id) FILTER(WHERE status='declined') declined_people,COALESCE(SUM(amount) FILTER(WHERE status='paid'),0) revenue FROM orders WHERE updated_at >= $1 AND updated_at < $2`,args),
     one(`SELECT COUNT(*) refunds_count,COALESCE(SUM(value),0) refunds FROM events WHERE type='refund' AND created_at >= $1 AND created_at < $2`,args),
+    one(`SELECT COALESCE(SUM(amount),0) traffic_spend,COALESCE(SUM(clicks),0) ad_clicks,COALESCE(SUM(impressions),0) ad_impressions FROM traffic_spend WHERE spend_date >= ($1::timestamptz AT TIME ZONE 'America/Chicago')::date AND spend_date <= ($2::timestamptz AT TIME ZONE 'America/Chicago')::date`,args),
     many(`SELECT COALESCE(NULLIF(page,''),'/') path,COUNT(DISTINCT ${session})::int visitors,COUNT(*)::int views FROM events WHERE type='page_view' AND created_at >= $1 AND created_at < $2 GROUP BY 1 ORDER BY views DESC LIMIT 30`,args),
     many(`SELECT COALESCE(NULLIF(metadata->>'device',''),'Unknown') device,COUNT(DISTINCT ${session})::int visitors FROM events WHERE type='page_view' AND created_at >= $1 AND created_at < $2 GROUP BY 1 ORDER BY visitors DESC`,args),
     many(`SELECT COALESCE(NULLIF(response_code,''),'—') response_code,COALESCE(NULLIF(response_message,''),'No gateway message') response,status,COUNT(*)::int attempts,COUNT(DISTINCT lead_id)::int people,COALESCE(SUM(amount),0) amount FROM orders WHERE updated_at >= $1 AND updated_at < $2 GROUP BY 1,2,3 ORDER BY attempts DESC`,args),
@@ -65,7 +66,7 @@ async function campaignReport(url){
     many(`SELECT date_trunc('hour',created_at) bucket,COUNT(*)::int leads FROM leads WHERE created_at >= $1 AND created_at < $2 GROUP BY 1 ORDER BY 1`,args),
     many(`SELECT date_trunc('hour',updated_at) bucket,COALESCE(SUM(amount),0) revenue FROM orders WHERE status='paid' AND updated_at >= $1 AND updated_at < $2 GROUP BY 1 ORDER BY 1`,args)
   ]);
-  const s={views:num(eventTotals.views),visitors:num(eventTotals.visitors),checkout_visitors:num(eventTotals.checkout_visitors),checkout_started:num(eventTotals.checkout_started),video_engaged:num(eventTotals.video_engaged),video_25:num(eventTotals.video_25),video_50:num(eventTotals.video_50),video_75:num(eventTotals.video_75),video_100:num(eventTotals.video_100),leads:num(leadTotals.leads),attempts:num(orderTotals.attempts),approvals:num(orderTotals.approvals),declines:num(orderTotals.declines),declined_attempts:num(orderTotals.declines),errors:num(orderTotals.errors),payment_people:num(orderTotals.payment_people),buyers:num(orderTotals.buyers),declined_people:num(orderTotals.declined_people),revenue:num(orderTotals.revenue),refunds:num(refundTotals.refunds)};
+  const s={views:num(eventTotals.views),visitors:num(eventTotals.visitors),checkout_visitors:num(eventTotals.checkout_visitors),checkout_started:num(eventTotals.checkout_started),video_engaged:num(eventTotals.video_engaged),video_25:num(eventTotals.video_25),video_50:num(eventTotals.video_50),video_75:num(eventTotals.video_75),video_100:num(eventTotals.video_100),leads:num(leadTotals.leads),attempts:num(orderTotals.attempts),approvals:num(orderTotals.approvals),declines:num(orderTotals.declines),declined_attempts:num(orderTotals.declines),errors:num(orderTotals.errors),payment_people:num(orderTotals.payment_people),buyers:num(orderTotals.buyers),declined_people:num(orderTotals.declined_people),revenue:num(orderTotals.revenue),refunds:num(refundTotals.refunds),traffic_spend:num(spendTotals.traffic_spend),ad_clicks:num(spendTotals.ad_clicks),ad_impressions:num(spendTotals.ad_impressions)};
   s.net_revenue=s.revenue-s.refunds;s.approval_rate=s.attempts?Number((s.approvals/s.attempts*100).toFixed(1)):0;s.conversion=s.visitors?Number((s.buyers/s.visitors*100).toFixed(2)):0;s.lead_conversion=s.leads?Number((s.buyers/s.leads*100).toFixed(2)):0;s.aov=s.buyers?s.revenue/s.buyers:0;s.rpv=s.visitors?s.revenue/s.visitors:0;s.rpl=s.leads?s.revenue/s.leads:0;
   const trendMap=new Map();for(const rows of [viewTrend,leadTrend,revenueTrend])for(const row of rows){const key=new Date(row.bucket).toISOString(),item=trendMap.get(key)||{bucket:key,views:0,leads:0,revenue:0};item.views+=num(row.views);item.leads+=num(row.leads);item.revenue+=num(row.revenue);trendMap.set(key,item)}
   return {range,summary:s,routes,devices,payments,offers,attribution,trend:[...trendMap.values()].sort((a,b)=>a.bucket.localeCompare(b.bucket))};
@@ -122,7 +123,7 @@ async function api(req,res,url){
       const [orders,spend,items,refundItems,chargebackTotal,chargebackItems]=await Promise.all([
         one(`SELECT COALESCE(SUM(amount),0) gross_revenue,COALESCE(SUM(refunded_amount),0) refunds FROM orders WHERE status='paid'`),
         one(`SELECT COALESCE(SUM(amount),0) total FROM traffic_spend`),
-        many(`SELECT id,spend_date,amount,source,notes,created_at FROM traffic_spend ORDER BY spend_date DESC,id DESC`),
+        many(`SELECT id,spend_date,amount,clicks,impressions,source,notes,created_at FROM traffic_spend ORDER BY spend_date DESC,id DESC`),
         many(`SELECT r.id,r.amount,r.action,r.updated_at,l.first_name,l.last_name,l.email,o.product_name FROM refunds r JOIN orders o ON o.id=r.order_id JOIN leads l ON l.id=r.lead_id WHERE r.status='succeeded' ORDER BY r.updated_at DESC,r.id DESC`),
         one(`SELECT COALESCE(SUM(amount),0) total FROM chargebacks WHERE status NOT IN ('won','reversed')`),
         many(`SELECT c.*,l.first_name,l.last_name,l.email,o.product_name FROM chargebacks c LEFT JOIN leads l ON l.id=c.lead_id LEFT JOIN orders o ON o.id=c.order_id ORDER BY c.occurred_at DESC,c.id DESC`)
@@ -131,19 +132,21 @@ async function api(req,res,url){
       return json(res,200,{grossRevenue,refunds,chargebacks,revenue,totalSpend,profit:grossRevenue-refunds-chargebacks-totalSpend,items,refundItems,chargebackItems,refundSyncStatus,chargebackSyncStatus});
     }
     if(req.method==='POST'&&url.pathname==='/api/admin/traffic-spend'){
-      const input=await body(req),spendDate=String(input.spend_date||'').trim(),amount=Math.round(Number(input.amount)*100)/100;
+      const input=await body(req),spendDate=String(input.spend_date||'').trim(),amount=Math.round(Number(input.amount)*100)/100,clicks=input.clicks===''||input.clicks==null?0:Number(input.clicks),impressions=input.impressions===''||input.impressions==null?0:Number(input.impressions);
       if(!/^\d{4}-\d{2}-\d{2}$/.test(spendDate)||Number.isNaN(Date.parse(`${spendDate}T00:00:00Z`)))return json(res,400,{error:'Choose a valid spend date'});
       if(!Number.isFinite(amount)||amount<=0)return json(res,400,{error:'Enter a traffic spend greater than zero'});
-      const item=await one(`INSERT INTO traffic_spend(spend_date,amount,source,notes) VALUES($1,$2,$3,$4) RETURNING id,spend_date,amount,source,notes,created_at`,[spendDate,amount,String(input.source||'').trim().slice(0,120),String(input.notes||'').trim().slice(0,500)]);
+      if(!Number.isSafeInteger(clicks)||clicks<0||!Number.isSafeInteger(impressions)||impressions<0)return json(res,400,{error:'Clicks and impressions must be whole numbers of zero or more'});
+      const item=await one(`INSERT INTO traffic_spend(spend_date,amount,clicks,impressions,source,notes) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,spend_date,amount,clicks,impressions,source,notes,created_at`,[spendDate,amount,clicks,impressions,String(input.source||'').trim().slice(0,120),String(input.notes||'').trim().slice(0,500)]);
       return json(res,201,{ok:true,item});
     }
     const trafficSpendMatch=url.pathname.match(/^\/api\/admin\/traffic-spend\/(\d+)$/);
     if(trafficSpendMatch&&req.method==='PUT'){
-      const id=Number(trafficSpendMatch[1]),input=await body(req),spendDate=String(input.spend_date||'').trim(),amount=Math.round(Number(input.amount)*100)/100;
+      const id=Number(trafficSpendMatch[1]),input=await body(req),spendDate=String(input.spend_date||'').trim(),amount=Math.round(Number(input.amount)*100)/100,clicks=input.clicks===''||input.clicks==null?0:Number(input.clicks),impressions=input.impressions===''||input.impressions==null?0:Number(input.impressions);
       if(!Number.isSafeInteger(id)||id<1)return json(res,400,{error:'Invalid traffic spend entry'});
       if(!/^\d{4}-\d{2}-\d{2}$/.test(spendDate)||Number.isNaN(Date.parse(`${spendDate}T00:00:00Z`)))return json(res,400,{error:'Choose a valid spend date'});
       if(!Number.isFinite(amount)||amount<=0)return json(res,400,{error:'Enter a traffic spend greater than zero'});
-      const item=await one(`UPDATE traffic_spend SET spend_date=$1,amount=$2,source=$3,notes=$4 WHERE id=$5 RETURNING id,spend_date,amount,source,notes,created_at`,[spendDate,amount,String(input.source||'').trim().slice(0,120),String(input.notes||'').trim().slice(0,500),id]);
+      if(!Number.isSafeInteger(clicks)||clicks<0||!Number.isSafeInteger(impressions)||impressions<0)return json(res,400,{error:'Clicks and impressions must be whole numbers of zero or more'});
+      const item=await one(`UPDATE traffic_spend SET spend_date=$1,amount=$2,clicks=$3,impressions=$4,source=$5,notes=$6 WHERE id=$7 RETURNING id,spend_date,amount,clicks,impressions,source,notes,created_at`,[spendDate,amount,clicks,impressions,String(input.source||'').trim().slice(0,120),String(input.notes||'').trim().slice(0,500),id]);
       if(!item)return json(res,404,{error:'Traffic spend entry not found'});
       return json(res,200,{ok:true,item});
     }
