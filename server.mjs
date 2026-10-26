@@ -137,6 +137,21 @@ async function api(req,res,url){
       const item=await one(`INSERT INTO traffic_spend(spend_date,amount,source,notes) VALUES($1,$2,$3,$4) RETURNING id,spend_date,amount,source,notes,created_at`,[spendDate,amount,String(input.source||'').trim().slice(0,120),String(input.notes||'').trim().slice(0,500)]);
       return json(res,201,{ok:true,item});
     }
+    const trafficSpendMatch=url.pathname.match(/^\/api\/admin\/traffic-spend\/(\d+)$/);
+    if(trafficSpendMatch&&req.method==='PUT'){
+      const id=Number(trafficSpendMatch[1]),input=await body(req),spendDate=String(input.spend_date||'').trim(),amount=Math.round(Number(input.amount)*100)/100;
+      if(!Number.isSafeInteger(id)||id<1)return json(res,400,{error:'Invalid traffic spend entry'});
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(spendDate)||Number.isNaN(Date.parse(`${spendDate}T00:00:00Z`)))return json(res,400,{error:'Choose a valid spend date'});
+      if(!Number.isFinite(amount)||amount<=0)return json(res,400,{error:'Enter a traffic spend greater than zero'});
+      const item=await one(`UPDATE traffic_spend SET spend_date=$1,amount=$2,source=$3,notes=$4 WHERE id=$5 RETURNING id,spend_date,amount,source,notes,created_at`,[spendDate,amount,String(input.source||'').trim().slice(0,120),String(input.notes||'').trim().slice(0,500),id]);
+      if(!item)return json(res,404,{error:'Traffic spend entry not found'});
+      return json(res,200,{ok:true,item});
+    }
+    if(trafficSpendMatch&&req.method==='DELETE'){
+      const id=Number(trafficSpendMatch[1]);if(!Number.isSafeInteger(id)||id<1)return json(res,400,{error:'Invalid traffic spend entry'});
+      const item=await one('DELETE FROM traffic_spend WHERE id=$1 RETURNING id',[id]);if(!item)return json(res,404,{error:'Traffic spend entry not found'});
+      return json(res,200,{ok:true,id});
+    }
     if(req.method==='GET'&&url.pathname==='/api/admin/leads/export'){const items=await many("SELECT l.*,CASE WHEN EXISTS(SELECT 1 FROM orders o WHERE o.lead_id=l.id AND o.status='paid') THEN 'customer' ELSE l.status END AS display_status FROM leads l ORDER BY l.created_at DESC"),columns=[['ID','id'],['First Name','first_name'],['Last Name','last_name'],['Email','email'],['Phone','phone'],['Status','display_status'],['Source','source'],['Tags','tags'],['Notes','notes'],['Email Consent','email_consent'],['SMS Consent','sms_consent'],['Unsubscribed','unsubscribed'],['AID','aid'],['TID','tid'],['UTM Source','utm_source'],['UTM Campaign','utm_campaign'],['Landing Page','landing_page'],['Created','created_at'],['Updated','updated_at']],csv='\uFEFF'+[columns.map(([label])=>csvCell(label)).join(','),...items.map(item=>columns.map(([,key])=>csvCell(item[key])).join(','))].join('\r\n');res.writeHead(200,{'content-type':'text/csv; charset=utf-8','content-disposition':`attachment; filename="wificode-leads-${now().slice(0,10)}.csv"`,'cache-control':'no-store'});return res.end(csv)}
     if(req.method==='GET'&&url.pathname==='/api/admin/orders'){const q=String(url.searchParams.get('q')||'').trim().slice(0,100),range=reportRange(url),pageSize=50,filter=`o.updated_at >= $1 AND o.updated_at < $2 AND ($3='' OR CONCAT_WS(' ',l.first_name,l.last_name) ILIKE '%'||$3||'%' OR COALESCE(l.email,'') ILIKE '%'||$3||'%' OR COALESCE(l.phone,'') ILIKE '%'||$3||'%' OR COALESCE(o.product_name,'') ILIKE '%'||$3||'%' OR COALESCE(o.transaction_id,'') ILIKE '%'||$3||'%')`,params=[range.start,range.end,q],total=Number((await one(`SELECT COUNT(*) AS total FROM orders o JOIN leads l ON l.id=o.lead_id WHERE ${filter}`,params)).total),pages=Math.max(1,Math.ceil(total/pageSize)),page=Math.min(pages,Math.max(1,Number(url.searchParams.get('page'))||1)),offset=(page-1)*pageSize,items=await many(`SELECT o.*,l.email,l.phone,l.first_name,l.last_name FROM orders o JOIN leads l ON l.id=o.lead_id WHERE ${filter} ORDER BY o.updated_at DESC LIMIT $4 OFFSET $5`,[...params,pageSize,offset]);return json(res,200,{items,pagination:{page,pageSize,total,pages},range,query:q})}
     if(req.method==='POST'&&url.pathname==='/api/admin/refunds'){

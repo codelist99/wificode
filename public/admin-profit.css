@@ -111,6 +111,7 @@
   min-width: 120px;
 }
 .finance-ledger{max-height:240px}.processor-note{margin:10px 2px 0;color:var(--muted);font-size:11px}
+.spend-actions{display:flex;gap:6px;white-space:nowrap}.spend-actions button{border:0;border-radius:6px;padding:6px 9px;font-size:10px;font-weight:800;cursor:pointer}.edit-spend{background:#e8f0ff;color:var(--blue)}.delete-spend{background:#ffe9e9;color:var(--red)}.spend-actions button:disabled{opacity:.55;cursor:wait}.cancel-spend-edit{background:#64748b!important}.spend-ledger th:last-child,.spend-ledger td:last-child{width:1%;white-space:nowrap}
 @media (max-width: 760px) {
   .profit-cards,
   .spend-form {
