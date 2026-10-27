@@ -88,7 +88,7 @@ function stream(file,res){if(!existsSync(file)){res.writeHead(404);return res.en
 function syncOfferPricing(pathname,html){
   html=html.replaceAll('wificode@neoai.freshdesk.com','support@kairostechnologylabs.com');
   if(/^\/thankyou(?:\/|\/index\.html)?$/.test(pathname)){
-    const bookingUrl='https://cal.com/support-staff-wznd51/wificode-onboarding';
+    const bookingUrl='https://cal.com/jon19/wificode-onboarding';
     html=html
       .replaceAll('https://wificodemembers.com/auth/sign-up',bookingUrl)
       .replaceAll('https:\\u002F\\u002Fwificodemembers.com\\u002Fauth\\u002Fsign-up','https:\\u002F\\u002Fcal.com\\u002Fsupport-staff-wznd51\\u002Fwificode-onboarding')
