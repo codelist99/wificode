@@ -1,10 +1,17 @@
 (() => {
   if (/^\/thankyou\/?$/.test(location.pathname)) {
+    const bookingUrl = 'https://cal.com/jon19/wificode-onboarding';
+    const repairBookingLinks = () => {
+      document.querySelectorAll('a[href*="cal.com/support-staff-wznd51"],a.schedule').forEach(link => {
+        if (link.href !== bookingUrl) link.href = bookingUrl;
+      });
+    };
     const ensureCallout = () => {
+      repairBookingLinks();
       if (document.querySelector('.wc-call-now')) return;
       const callout = document.createElement('section');
       callout.className = 'wc-call-now';
-      callout.innerHTML = '<div><h1>Congratulations</h1><p class="thanks">Thanks for purchasing WifiCode</p><strong>YOUR ORDER IS COMPLETE</strong><h2>Step 1: Call Our Office Now To Get Started</h2><a class="phone" href="tel:+12067032153">(206) 703-2153</a><p>Tap the number or call now so our team can help you get started.</p><div class="or">— OR —</div><a class="schedule" href="https://cal.com/jon19/wificode-onboarding" target="_blank" rel="noreferrer noopener">Schedule Your Onboarding Call</a></div>';
+      callout.innerHTML = '<div><h1>Congratulations</h1><p class="thanks">Thanks for purchasing WifiCode</p><strong>YOUR ORDER IS COMPLETE</strong><h2>Step 1: Call Our Office Now To Get Started</h2><a class="phone" href="tel:+12067032153">(206) 703-2153</a><p>Tap the number or call now so our team can help you get started.</p><div class="or">— OR —</div><a class="schedule" href="'+bookingUrl+'" target="_blank" rel="noreferrer noopener">Schedule Your Onboarding Call</a></div>';
       document.body.prepend(callout);
     };
     if (!document.getElementById('wc-call-now-style')) {

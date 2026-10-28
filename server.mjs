@@ -92,6 +92,7 @@ function syncOfferPricing(pathname,html){
     html=html
       .replaceAll('https://wificodemembers.com/auth/sign-up',bookingUrl)
       .replaceAll('https:\\u002F\\u002Fwificodemembers.com\\u002Fauth\\u002Fsign-up','https:\\u002F\\u002Fcal.com\\u002Fsupport-staff-wznd51\\u002Fwificode-onboarding')
+      .replaceAll('support-staff-wznd51','jon19')
       .replaceAll('Click Here To Sign Up','Schedule Your Onboarding Call')
       .replaceAll('Sign Up For Your Account','Schedule Your Onboarding Call')
       .replaceAll('STEP 3:','STEP 2:');
