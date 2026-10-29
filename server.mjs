@@ -6,7 +6,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { upsertLead, addEvent, scheduleAutomations, one, many, run, ready } from './lib/database.mjs';
 import { processDueMessages } from './lib/automation.mjs';
 import { getProduct } from './lib/products.mjs';
-import { chargeOpaque, chargeProfile, refundOrVoid, getTransactionDetails, getRecentRefundTransactions, getSettledTransactionDiagnostics } from './lib/authorize-net.mjs';
+import { chargeOpaque, chargeProfile, refundOrVoid, getTransactionDetails, getRecentRefundTransactions, getSettledTransactionDiagnostics, getSettledTransactionsAboveAmount } from './lib/authorize-net.mjs';
 import { getAllChargebacks } from './lib/zen-dashboard.mjs';
 
 const root=process.cwd(),port=Number(process.env.PORT||4173),now=()=>new Date().toISOString();
@@ -47,6 +47,16 @@ const types={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8'
 const json=(res,status,value)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(value));};
 const csvCell=value=>{let text=value==null?'':String(value);if(/^[=+\-@]/.test(text))text=`'${text}`;return `"${text.replace(/"/g,'""')}"`};
 const MAX_REPORTED_ORDER_AMOUNT=1500;
+const largeDealCache=new Map();
+async function untrackedLargeDeals(startDate,endDate){
+  const start=new Date(startDate),end=new Date(endDate),key=`${start.toISOString().slice(0,13)}:${end.toISOString().slice(0,13)}`,cached=largeDealCache.get(key);
+  if(cached&&Date.now()-cached.checkedAt<300000)return cached.value;
+  const gatewayItems=(await getSettledTransactionsAboveAmount(start,end,MAX_REPORTED_ORDER_AMOUNT)).filter(item=>{const submitted=new Date(item.submittedAt);return !Number.isNaN(submitted.valueOf())&&submitted>=start&&submitted<end});
+  if(!gatewayItems.length)return {amount:0,items:[]};
+  const local=await many(`SELECT transaction_id FROM orders WHERE transaction_id=ANY($1::text[])`,[gatewayItems.map(item=>item.transactionId)]),localIds=new Set(local.map(item=>String(item.transaction_id))),items=gatewayItems.filter(item=>!localIds.has(item.transactionId)),value={amount:items.reduce((sum,item)=>sum+Number(item.amount||0),0),items};
+  largeDealCache.set(key,{checkedAt:Date.now(),value});
+  return value;
+}
 const soldLeadSelect=`SELECT l.id,l.first_name,l.last_name,l.email,l.phone,COUNT(o.id)::int purchase_count,COUNT(o.id) FILTER(WHERE o.transaction_id IS NOT NULL AND o.amount>o.refunded_amount)::int refundable_count,COALESCE(SUM(GREATEST(0,o.amount-o.refunded_amount)) FILTER(WHERE o.transaction_id IS NOT NULL),0) refundable_amount,COALESCE(SUM(o.amount),0) gross_sales,STRING_AGG(o.product_name, ', ' ORDER BY o.created_at) products,MIN(o.created_at) first_purchase_at,MAX(o.updated_at) last_purchase_at,COALESCE(r.refund_count,0)::int refund_count,COALESCE(r.refund_amount,0) refund_amount,COALESCE(SUM(o.amount),0)-COALESCE(r.refund_amount,0) net_sales FROM leads l JOIN orders o ON o.lead_id=l.id AND o.status='paid' AND o.amount<=${MAX_REPORTED_ORDER_AMOUNT} LEFT JOIN (SELECT x.lead_id,COUNT(*) refund_count,COALESCE(SUM(x.amount),0) refund_amount FROM refunds x JOIN orders ro ON ro.id=x.order_id WHERE x.status='succeeded' AND ro.amount<=${MAX_REPORTED_ORDER_AMOUNT} GROUP BY x.lead_id) r ON r.lead_id=l.id GROUP BY l.id,l.first_name,l.last_name,l.email,l.phone,r.refund_count,r.refund_amount`;
 const reportRange=url=>{const endInput=new Date(url.searchParams.get('end')||Date.now()),end=Number.isNaN(endInput.valueOf())?new Date():endInput,startInput=new Date(url.searchParams.get('start')||end.valueOf()-86400000),start=Number.isNaN(startInput.valueOf())?new Date(end.valueOf()-86400000):startInput;return {start:new Date(Math.max(start.valueOf(),end.valueOf()-366*86400000)).toISOString(),end:end.toISOString()}};
 const num=value=>Number(value||0);
@@ -67,7 +77,9 @@ async function campaignReport(url){
     many(`SELECT date_trunc('hour',created_at) bucket,COUNT(*)::int leads FROM leads WHERE created_at >= $1 AND created_at < $2 GROUP BY 1 ORDER BY 1`,args),
     many(`SELECT date_trunc('hour',updated_at) bucket,COALESCE(SUM(amount),0) revenue FROM orders WHERE status='paid' AND amount<=${MAX_REPORTED_ORDER_AMOUNT} AND updated_at >= $1 AND updated_at < $2 GROUP BY 1 ORDER BY 1`,args)
   ]);
+  const externalLargeDeals=await untrackedLargeDeals(range.start,range.end);
   const s={views:num(eventTotals.views),visitors:num(eventTotals.visitors),checkout_visitors:num(eventTotals.checkout_visitors),thankyou_visitors:num(eventTotals.thankyou_visitors),step2_webinar_clicks:num(eventTotals.step2_webinar_clicks),step2_webinar_clickers:num(eventTotals.step2_webinar_clickers),checkout_started:num(eventTotals.checkout_started),video_engaged:num(eventTotals.video_engaged),video_25:num(eventTotals.video_25),video_50:num(eventTotals.video_50),video_75:num(eventTotals.video_75),video_100:num(eventTotals.video_100),leads:num(leadTotals.leads),attempts:num(orderTotals.attempts),approvals:num(orderTotals.approvals),declines:num(orderTotals.declines),declined_attempts:num(orderTotals.declines),errors:num(orderTotals.errors),payment_people:num(orderTotals.payment_people),buyers:num(orderTotals.buyers),declined_people:num(orderTotals.declined_people),revenue:num(orderTotals.revenue),refunds:num(refundTotals.refunds),traffic_spend:num(spendTotals.traffic_spend),ad_clicks:num(spendTotals.ad_clicks),ad_impressions:num(spendTotals.ad_impressions)};
+  s.revenue=Math.max(0,Math.round((s.revenue-externalLargeDeals.amount)*100)/100);
   s.net_revenue=s.revenue-s.refunds;s.approval_rate=s.attempts?Number((s.approvals/s.attempts*100).toFixed(1)):0;s.conversion=s.visitors?Number((s.buyers/s.visitors*100).toFixed(2)):0;s.lead_conversion=s.leads?Number((s.buyers/s.leads*100).toFixed(2)):0;s.aov=s.buyers?s.revenue/s.buyers:0;s.rpv=s.visitors?s.revenue/s.visitors:0;s.rpl=s.leads?s.revenue/s.leads:0;
   const trendMap=new Map();for(const rows of [viewTrend,leadTrend,revenueTrend])for(const row of rows){const key=new Date(row.bucket).toISOString(),item=trendMap.get(key)||{bucket:key,views:0,leads:0,revenue:0};item.views+=num(row.views);item.leads+=num(row.leads);item.revenue+=num(row.revenue);trendMap.set(key,item)}
   return {range,summary:s,routes,devices,payments,offers,attribution,trend:[...trendMap.values()].sort((a,b)=>a.bucket.localeCompare(b.bucket))};
@@ -123,15 +135,15 @@ async function api(req,res,url){
       void syncAuthorizeRefunds();
       void syncZenChargebacks();
       const [orders,spend,items,refundItems,chargebackTotal,chargebackItems]=await Promise.all([
-        one(`SELECT COALESCE(SUM(amount),0) gross_revenue,COALESCE(SUM(refunded_amount),0) refunds FROM orders WHERE status='paid' AND amount<=${MAX_REPORTED_ORDER_AMOUNT}`),
+        one(`SELECT COALESCE(SUM(amount),0) gross_revenue,COALESCE(SUM(refunded_amount),0) refunds,MIN(created_at) first_order_at FROM orders WHERE status='paid' AND amount<=${MAX_REPORTED_ORDER_AMOUNT}`),
         one(`SELECT COALESCE(SUM(amount),0) total FROM traffic_spend`),
         many(`SELECT id,spend_date,amount,clicks,impressions,source,notes,created_at FROM traffic_spend ORDER BY spend_date DESC,id DESC`),
         many(`SELECT r.id,r.amount,r.action,r.updated_at,l.first_name,l.last_name,l.email,o.product_name FROM refunds r JOIN orders o ON o.id=r.order_id JOIN leads l ON l.id=r.lead_id WHERE r.status='succeeded' AND o.amount<=${MAX_REPORTED_ORDER_AMOUNT} ORDER BY r.updated_at DESC,r.id DESC`),
         one(`SELECT COALESCE(SUM(c.amount),0) total FROM chargebacks c LEFT JOIN orders o ON o.id=c.order_id WHERE c.status NOT IN ('won','reversed') AND COALESCE(o.amount,c.amount)<=${MAX_REPORTED_ORDER_AMOUNT}`),
         many(`SELECT c.*,l.first_name,l.last_name,l.email,o.product_name FROM chargebacks c LEFT JOIN leads l ON l.id=c.lead_id LEFT JOIN orders o ON o.id=c.order_id WHERE COALESCE(o.amount,c.amount)<=${MAX_REPORTED_ORDER_AMOUNT} ORDER BY c.occurred_at DESC,c.id DESC`)
       ]);
-      const grossRevenue=Number(orders?.gross_revenue||0),refunds=Number(orders?.refunds||0),chargebacks=Number(chargebackTotal?.total||0),revenue=grossRevenue-refunds,totalSpend=Number(spend?.total||0);
-      return json(res,200,{grossRevenue,refunds,chargebacks,revenue,totalSpend,profit:grossRevenue-refunds-chargebacks-totalSpend,items,refundItems,chargebackItems,refundSyncStatus,chargebackSyncStatus});
+      const exclusionStart=orders?.first_order_at?new Date(new Date(orders.first_order_at).getTime()-7*86400000):new Date(Date.now()-30*86400000),externalLargeDeals=await untrackedLargeDeals(exclusionStart,new Date()),grossRevenue=Math.max(0,Math.round((Number(orders?.gross_revenue||0)-externalLargeDeals.amount)*100)/100),refunds=Number(orders?.refunds||0),chargebacks=Number(chargebackTotal?.total||0),revenue=grossRevenue-refunds,totalSpend=Number(spend?.total||0);
+      return json(res,200,{grossRevenue,refunds,chargebacks,revenue,totalSpend,profit:grossRevenue-refunds-chargebacks-totalSpend,items,refundItems,chargebackItems,refundSyncStatus,chargebackSyncStatus,excludedLargeDeals:{amount:externalLargeDeals.amount,count:externalLargeDeals.items.length}});
     }
     if(req.method==='POST'&&url.pathname==='/api/admin/traffic-spend'){
       const input=await body(req),spendDate=String(input.spend_date||'').trim(),amount=Math.round(Number(input.amount)*100)/100,clicks=input.clicks===''||input.clicks==null?0:Number(input.clicks),impressions=input.impressions===''||input.impressions==null?0:Number(input.impressions);
