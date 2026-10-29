@@ -23,6 +23,7 @@ const $ = (s) => document.querySelector(s),
     `<tr><td class="empty" colspan="${n}">${t}</td></tr>`;
 let report,
   spendItems = [],
+  leadsLocked = true,
   pages = { orders: 1, leads: 1, sales: 1 },
   page = { orders: 1, leads: 1, sales: 1 };
 function range() {
@@ -347,10 +348,10 @@ async function loadOrders() {
               o.status === "paid" && o.transaction_id && remaining > 0
                 ? `<button class="refund-button" data-order="${Number(o.id)}" data-remaining="${remaining.toFixed(2)}">Refund</button>`
                 : `<span class="refund-state">${esc(o.refund_status || "—")}</span>`;
-          return `<tr><td><b>${esc([o.first_name, o.last_name].filter(Boolean).join(" ") || "Unknown")}</b></td><td>${esc(o.email || "—")}</td><td>${esc(o.phone || "—")}</td><td>${esc(o.product_name)}</td><td>${money(o.amount)}${Number(o.refunded_amount) > 0 ? `<small class="refund-note">${money(o.refunded_amount)} returned</small>` : ""}</td><td><span class="badge ${esc(o.status)}">${esc(o.status)}</span></td><td class="response">${esc(o.response_code || "—")} · ${esc(o.response_message || "—")}</td><td>${esc(o.transaction_id || "—")}</td><td>${date(o.updated_at)}</td><td>${action}</td></tr>`;
+          return `<tr><td><b>${esc([o.first_name, o.last_name].filter(Boolean).join(" ") || "Unknown")}</b></td><td>${esc(o.product_name)}</td><td>${money(o.amount)}${Number(o.refunded_amount) > 0 ? `<small class="refund-note">${money(o.refunded_amount)} returned</small>` : ""}</td><td><span class="badge ${esc(o.status)}">${esc(o.status)}</span></td><td class="response">${esc(o.response_code || "—")} · ${esc(o.response_message || "—")}</td><td>${esc(o.transaction_id || "—")}</td><td>${date(o.updated_at)}</td><td>${action}</td></tr>`;
         })
         .join("")
-    : empty(10);
+    : empty(8);
   pager("orders", d.pagination, "payment records");
 }
 
@@ -404,6 +405,9 @@ async function loadLeads() {
   );
   pages.leads = d.pagination.pages;
   page.leads = d.pagination.page;
+  leadsLocked = Boolean(d.locked);
+  $("#tab-leads").classList.toggle("lead-data-locked", Boolean(d.locked));
+  $("#lead-lock").classList.toggle("unlocked", !d.locked);
   $("#leads-table").innerHTML = d.items.length
     ? d.items
         .map(
@@ -423,8 +427,9 @@ async function loadSales() {
   $("#sales-table").innerHTML = d.items.length
     ? d.items
         .map((s) => {
-          const canRefund = Number(s.refundable_count) > 0;
-          return `<tr><td><b>${esc([s.first_name, s.last_name].filter(Boolean).join(" ") || "Unknown")}</b><button class="refund-button buyer-refund-button" data-lead="${Number(s.id)}" ${canRefund ? "" : `disabled title="No refundable balance remains"`}>${canRefund ? "Refund" : "Refunded"}</button></td><td>${esc(s.email || "—")}</td><td>${esc(s.phone || "—")}</td><td>${s.purchase_count}</td><td class="response">${esc(s.products || "—")}</td><td>${money(s.gross_sales)}</td><td>${money(s.refund_amount)}${s.refund_count ? ` (${s.refund_count})` : ""}</td><td><b>${money(s.net_sales)}</b></td><td>${date(s.last_purchase_at)}</td></tr>`;
+          const canRefund = Number(s.refundable_count) > 0,
+            contact = s.contact_hidden ? '<span class="protected-contact">Hidden</span>' : null;
+          return `<tr><td><b>${esc([s.first_name, s.last_name].filter(Boolean).join(" ") || "Unknown")}</b><button class="refund-button buyer-refund-button" data-lead="${Number(s.id)}" ${canRefund ? "" : `disabled title="No refundable balance remains"`}>${canRefund ? "Refund" : "Refunded"}</button></td><td>${contact || esc(s.email || "—")}</td><td>${contact || esc(s.phone || "—")}</td><td>${s.purchase_count}</td><td class="response">${esc(s.products || "—")}</td><td>${money(s.gross_sales)}</td><td>${money(s.refund_amount)}${s.refund_count ? ` (${s.refund_count})` : ""}</td><td><b>${money(s.net_sales)}</b></td><td>${date(s.last_purchase_at)}</td></tr>`;
         })
         .join("")
     : empty(9);
@@ -695,6 +700,25 @@ $("#order-search-button").onclick = () => {
 $("#lead-search-button").onclick = () => {
   page.leads = 1;
   loadLeads();
+};
+$("#lead-unlock-button").onclick = async () => {
+  const pin = prompt("Enter the four-digit lead access PIN:");
+  if (pin === null) return;
+  try {
+    await api("/api/admin/leads/unlock", {
+      method: "POST",
+      body: JSON.stringify({ pin }),
+    });
+    await loadLeads();
+    toast("Lead data unlocked for one hour");
+  } catch (error) {
+    toast(error.message);
+  }
+};
+$("#lead-export").onclick = (event) => {
+  if (!leadsLocked) return;
+  event.preventDefault();
+  toast("Unlock lead data before exporting");
 };
 $("#sale-search-button").onclick = () => {
   page.sales = 1;

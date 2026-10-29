@@ -30,3 +30,14 @@
   box-shadow: -8px 0 12px -12px #162033;
 }
 #tab-payments th:last-child { z-index: 3; background: #f7f9fc; }
+.lead-lock { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 18px; padding: 16px 18px; border: 1px solid #c7d2fe; border-radius: 12px; background: #eef2ff; }
+.lead-lock strong,.lead-lock span { display: block; }
+.lead-lock span { margin-top: 4px; color: var(--muted); }
+.lead-lock button { border: 0; border-radius: 8px; padding: 11px 15px; background: var(--purple); color: #fff; font-weight: 800; cursor: pointer; white-space: nowrap; }
+.lead-lock.unlocked { background: #ecfdf5; border-color: #a7f3d0; }
+.lead-lock.unlocked strong::after { content: " — Unlocked"; color: var(--green); }
+.lead-lock.unlocked button { display: none; }
+.lead-data-locked #leads-table { filter: blur(6px); user-select: none; pointer-events: none; }
+.lead-data-locked #lead-search,.lead-data-locked #lead-search-button,.lead-data-locked #lead-export { opacity: .45; pointer-events: none; }
+.protected-contact { display: inline-block; padding: 4px 8px; border-radius: 6px; background: #eef2f7; color: #7b8798; font-size: 12px; font-weight: 800; }
+@media(max-width:760px){.lead-lock{align-items:flex-start;flex-direction:column}.lead-lock button{width:100%}}

@@ -316,8 +316,6 @@
                 <thead>
                   <tr>
                     <th>Customer</th>
-                    <th>Email</th>
-                    <th>Phone</th>
                     <th>Product</th>
                     <th>Amount</th>
                     <th>Status</th>
@@ -402,6 +400,10 @@
         </div>
       </section>
       <section class="tabpage" id="tab-leads">
+        <div class="lead-lock" id="lead-lock">
+          <div><strong>Lead data protected</strong><span>Enter the four-digit PIN to reveal this information for one hour.</span></div>
+          <button id="lead-unlock-button">Unlock lead data</button>
+        </div>
         <div class="section-head">
           <div>
             <h1>Lead Intelligence</h1>
@@ -412,7 +414,7 @@
               id="lead-search"
               placeholder="Search name, email or phone"
             /><button id="lead-search-button">Search</button
-            ><a class="action-link" href="/api/admin/leads/export"
+            ><a class="action-link" id="lead-export" href="/api/admin/leads/export"
               >Export CSV</a
             >
           </div>
