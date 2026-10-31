@@ -134,7 +134,7 @@ function renderOverview() {
     kpi("CPL", cpl === null ? "—" : money(cpl), "Cost per captured lead"),
     kpi("CPA", cpa === null ? "—" : money(cpa), "Cost per buyer"),
     kpi("Clicks", integer(clicks), `${integer(impressions)} impressions`),
-    kpi("Zen chargeback ratio", `${chargebackRatio}%`, `${integer(s.chargebacks_count)} active cases / ${integer(s.chargeback_sales_count)} approved sales`),
+    kpi("Chargeback ratio", `${chargebackRatio}%`, `${integer(s.chargebacks_count)} active cases / ${integer(s.chargeback_sales_count)} approved sales`),
     kpi("CVR", `${cvr}%`, `Buyer / ${conversionLabel} conversion`),
     kpi(
       "ROAS",
