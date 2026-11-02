@@ -2,10 +2,10 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { extname, join, normalize } from 'node:path';
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { upsertLead, addEvent, scheduleAutomations, one, many, run, ready } from './lib/database.mjs';
 import { processDueMessages } from './lib/automation.mjs';
-import { getProduct } from './lib/products.mjs';
+import { getProduct, products } from './lib/products.mjs';
 import { chargeOpaque, chargeProfile, refundOrVoid, getTransactionDetails, getRecentRefundTransactions, getSettledTransactionDiagnostics, getSettledTransactionsAboveAmount } from './lib/authorize-net.mjs';
 import { getAllChargebacks } from './lib/zen-dashboard.mjs';
 
@@ -134,6 +134,10 @@ async function api(req,res,url){
     if(!requireAdmin(req,res))return;
     if(req.method==='POST'&&url.pathname==='/api/admin/leads/unlock'){const input=await body(req);if(!secureEqual(String(input.pin||''),'0720'))return json(res,401,{error:'Incorrect lead access PIN'});setLeadAccessSession(req,res);return json(res,200,{ok:true})}
     if(req.method==='GET'&&url.pathname==='/api/admin/report'){await syncZenChargebacks();return json(res,200,await campaignReport(url))}
+    if(req.method==='GET'&&url.pathname==='/api/admin/system-audit'){
+      const identity=await one(`SELECT current_database() database,current_user db_user`),orderProducts=await many(`SELECT product_id,product_name,MIN(amount) min_amount,MAX(amount) max_amount,COUNT(*)::int records FROM orders GROUP BY 1,2 ORDER BY 1,2`),databaseFingerprint=createHash('sha256').update(process.env.DATABASE_URL||'missing').digest('hex').slice(0,16);
+      return json(res,200,{offer:'wificode',gateway:'authorize_net',database:{...identity,fingerprint:databaseFingerprint},catalog:products,orderProducts});
+    }
     if(req.method==='GET'&&url.pathname==='/api/admin/authorize-diagnostics'){const first=await one(`SELECT MIN(created_at) first_at FROM orders`),start=first?.first_at||new Date(Date.now()-30*86400000),report=await getSettledTransactionDiagnostics(new Date(new Date(start).getTime()-86400000),new Date()),orders=await many(`(SELECT transaction_id FROM orders WHERE transaction_id IS NOT NULL ORDER BY updated_at DESC LIMIT 20) UNION ALL (SELECT transaction_id FROM orders WHERE transaction_id IS NOT NULL ORDER BY updated_at ASC LIMIT 20)`),details=[];for(const order of orders){try{details.push(await getTransactionDetails(order.transaction_id))}catch(error){details.push({transactionId:order.transaction_id,error:error.message})}}const gatewayDates=details.map(item=>item.submittedAt).filter(Boolean).sort();return json(res,200,{...report,gatewayDateRange:{first:gatewayDates[0]||null,last:gatewayDates.at(-1)||null},orderStatusCounts:details.reduce((out,item)=>{const key=item.error?`error: ${item.error}`:`${item.transactionType||'unknown'} / ${item.status||'unknown'} / batch:${item.batchId||'none'}`;out[key]=(out[key]||0)+1;return out},{})})}
     if(req.method==='GET'&&url.pathname==='/api/admin/traffic-spend'){
       // Reconciliation must never delay or blank the live dashboard. Both sync
