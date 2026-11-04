@@ -1,7 +1,8 @@
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { extname, join, normalize } from 'node:path';
+import { dirname, extname, join, normalize } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createHash, createHmac, timingSafeEqual, randomBytes, scryptSync } from 'node:crypto';
 import { upsertLead, addEvent, scheduleAutomations, one, many, run, ready } from './lib/database.mjs';
 import { processDueMessages } from './lib/automation.mjs';
@@ -9,7 +10,7 @@ import { getProduct, products } from './lib/products.mjs';
 import { chargeOpaque, chargeProfile, refundOrVoid, getTransactionDetails, getRecentRefundTransactions, getSettledTransactionDiagnostics, getSettledTransactionsAboveAmount } from './lib/authorize-net.mjs';
 import { getAllChargebacks } from './lib/zen-dashboard.mjs';
 
-const root=process.cwd(),port=Number(process.env.PORT||4173),now=()=>new Date().toISOString();
+const root=dirname(fileURLToPath(import.meta.url)),port=Number(process.env.PORT||4173),now=()=>new Date().toISOString();
 let refundSyncAt=0,refundSyncPromise,refundSyncStatus={ok:null,message:'Not checked'};
 let chargebackSyncAt=0,chargebackSyncPromise,chargebackSyncStatus={ok:null,message:'Not checked'};
 async function syncAuthorizeRefunds(){
